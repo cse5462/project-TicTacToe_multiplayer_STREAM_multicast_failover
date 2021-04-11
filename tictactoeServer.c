@@ -23,7 +23,7 @@
 /*************************/
 
 /* The protocol version number used. */
-#define VERSION 5
+#define VERSION 6
 
 /* The number of command line arguments. */
 #define NUM_ARGS 2
@@ -40,7 +40,9 @@
 /* The number of columns for the TicIacToe board. */
 #define COLUMNS 3
 /* The size (in bytes) of each game command. */
-#define CMD_SIZE 5
+#define CMD_SIZE 4
+/* The size (in bytes) of the game state. */
+#define GAME_SIZE (ROWS * COLUMNS)
 /* The maximum number of games the server can play simultaneously. */
 #define MAX_GAMES 10
 /* The baord marker used for Player 1 */
@@ -55,7 +57,6 @@
 /* Structure to send and recieve player messages. */
 struct Buffer {
     char version;   // version number
-    char seqNum;    // sequence number
     char command;   // player command
     char data;      // data for command if applicable
     char gameNum;   // game number
@@ -65,7 +66,6 @@ struct Buffer {
 struct TTT_Game {
     int sd;                         // socket descriptor for connected player
     int gameNum;                    // game number
-    int seqNum;                     // sequence number the game is currently on
     int winner;                     // player who won, 0 if draw, -1 if game not over
     char board[ROWS*COLUMNS];       // TicTacToe game board state
 };
@@ -94,7 +94,6 @@ void reset_game(struct TTT_Game *game);
 void init_game_roster(struct TTT_Game roster[MAX_GAMES]);
 int find_open_game(struct TTT_Game roster[MAX_GAMES]);
 int get_command(int sd, struct Buffer *msg);
-int validate_sequence_num(const struct Buffer *msg, const struct TTT_Game *game);
 int validate_move(int choice, const struct TTT_Game *game);
 int minimax(struct TTT_Game *game, int depth, int isMax);
 int find_best_move(struct TTT_Game *game);
@@ -298,7 +297,6 @@ void reset_game(struct TTT_Game *game) {
     }
     /* Reset game attributes */
     game->sd = 0;
-    game->seqNum = 0;
     game->winner = -1;
     /* Reset game board */
     init_shared_state(game);
@@ -371,9 +369,6 @@ int get_command(int sd, struct Buffer *msg) {
     if (msg->version != VERSION) {  // check for correct version
         print_error("get_command: Protocol version not supported", 0, 0);
         return ERROR_CODE;
-    } else if (msg->seqNum < 0) {  // check for valid sequence number
-        print_error("get_command: Invalid sequence number", 0, 0);
-        return ERROR_CODE;
     } else if (msg->command < NEW_GAME || msg->command > GAME_OVER) {  // check for valid command
         print_error("get_command: Invalid command", 0, 0);
         return ERROR_CODE;
@@ -396,8 +391,6 @@ void new_game(const struct Buffer *msg, struct TTT_Game *game) {
     printf("The remote player issued a NEW_GAME command\n");
     /* Initialize the board */
     init_shared_state(game);
-    /* Increment sequence number for next command to send to remote player */
-    game->seqNum++;
     /* Get first move to send to remote player */
     if ((move = send_p1_move(game)) == ERROR_CODE) {
         /* Reset game if there was an error sending the move */
@@ -425,8 +418,6 @@ void move(const struct Buffer *msg, struct TTT_Game *game) {
     printf("Player 2 chose the move:  %c\n", msg->data);
     /* Check that the received move is valid */
     if (validate_move(move, game)) {
-        /* Increment sequence number for next command to send to remote player */
-        game->seqNum++;
         /* Update the board (for Player 2) and check if someone won */
         game->board[move-1] = P2_MARK;
         if (check_game_over(game)) {
@@ -469,30 +460,6 @@ void game_over(const struct Buffer *msg, struct TTT_Game *game) {
     }
     /* Reset the game */
     reset_game(game);
-}
-
-/**
- * @brief Checks the sequence number of the received message with the corresponding game to make sure
- * that the sequence number is valid.
- * 
- * @param msg The message containing the command that the remote player sends.
- * @param game The current game of TicTacToe being played.
- * @return A positive number if the sequence number for the current game is valid, 0 if it is a duplicate,
- * an error code (-2) if it has already been processed, and an error code (-1) if it is invalid.
- */
-int validate_sequence_num(const struct Buffer *msg, const struct TTT_Game *game) {
-    if (msg->seqNum > game->seqNum) {  // received new sequence before previous one could be processed
-        printf("Game #%d received an invalid sequence number\n", game->gameNum);
-        return -1;
-    } else if (msg->seqNum == game->seqNum-1) {    // received duplicate sequence
-        printf("Game #%d received a duplicate command\n", game->gameNum);
-        return 0;
-    } else if (msg->seqNum < game->seqNum-1) {   // received sequence that has already been processed
-        printf("Game #%d received a command that has already been processed\n", game->gameNum);
-        return -2;
-    } else {
-        return 1;
-    }
 }
 
 /**
@@ -622,7 +589,6 @@ int send_p1_move(struct TTT_Game *game) {
     while (!validate_move(move, game)) move = find_best_move(game);
     /* Pack move information into message */
     msg.version = VERSION;
-    msg.seqNum = game->seqNum++;
     msg.command = MOVE;
     msg.data = move + '0';
     msg.gameNum = game->gameNum;
@@ -741,7 +707,6 @@ void send_game_over(struct TTT_Game *game) {
     struct Buffer msg = {0};
     /* Pack command information into message */
     msg.version = VERSION;
-    msg.seqNum = game->seqNum;
     msg.command = GAME_OVER;
     msg.gameNum = game->gameNum;
     /* Send the command to the remote player */
@@ -826,15 +791,8 @@ void tictactoe(int sd) {
                 printf("********  Game #%d  ********\n", currentGame->gameNum);
                 /* Get the command for the current game */
                 if ((rv = get_command(currentGame->sd, &msg)) > 0) {
-                    /* Validate the sequence number of the command */
-                    if ((rv = validate_sequence_num(&msg, currentGame)) > 0) {
-                        /* Valid sequence number -> process received command for current game */
-                        commands[(int)msg.command](&msg, currentGame);
-                    } else if (rv == -1) {
-                        /* Invalid sequence number -> reset game */
-                        print_error("tictactoe: Unable to process out of order command", 0, 0);
-                        reset_game(currentGame);
-                    }
+                    /* Process received command for current game */
+                    commands[(int)msg.command](&msg, currentGame);
                 } else {
                     /* Invalid command received -> reset game */
                     reset_game(currentGame);

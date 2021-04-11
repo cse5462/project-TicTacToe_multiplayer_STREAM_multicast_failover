@@ -24,7 +24,6 @@
 struct buffer
 {
     char version;
-    char seqNum;
     char command;
     char data;
     char gameNumber;
@@ -75,9 +74,8 @@ int main(int argc, char *argv[])
         exit(1);
     }
     printf("Connected to the server!\n");
-    Buffer.version = 5;
+    Buffer.version = 6;
     Buffer.command = 0;
-    Buffer.seqNum = 0;
     Buffer.data = 0;
     printf("Attempting to send game request...\n");
     if (send(sd, &Buffer, sizeof(Buffer), MSG_NOSIGNAL) <= 0)
@@ -100,7 +98,6 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
     char mark, pick; // either an 'x' or an 'o'
     struct buffer player2, player1 = {0};
     struct buffer *p2Player1 = &player1;
-    player2.seqNum = 0;
     char gameNumber;
     /* loop, first print the board, then ask player 'n' to make a move */
     do
@@ -127,13 +124,12 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
                     printf("Closing connection!\n");
                     exit(1);
                 }
-            } while (rc < 5);
+            } while (rc < 4);
             pick = p2Player1->data;
             if (gameNumber == 0)
             {
                 gameNumber = p2Player1->gameNumber;
             }
-            printf("Player1SeqNum: %d Player2seqNum: %d\n", p2Player1->seqNum, player2.seqNum);
 
             if (rc <= 0)
             {
@@ -141,11 +137,9 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
                 printf("Closing connection!\n");
                 exit(1);
             }
-             player2.seqNum = p2Player1->seqNum;
         }
-        
-         printf("number %d: \n",p2Player1->seqNum);
-         if (p2Player1->command == 0 || p2Player1->version != 5 || gameNumber != p2Player1->gameNumber)
+
+         if (p2Player1->command == 0 || p2Player1->version != 6 || gameNumber != p2Player1->gameNumber)
             {
                 printf("Player 1 sent invalid datagram\n");
                 printf("Closing connection!\n");
@@ -179,7 +173,7 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
             if (player == 2)
             {
                 printf("Sending normally...\n");
-                printf("NormalSend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
+                printf("NormalSend Version: %d, Command %d, Data %c\n", player2.version, player2.command, player2.data);
                 rc = send(sd, &player2, sizeof(player2), MSG_NOSIGNAL);
                 if (rc < 0)
                 {
@@ -202,7 +196,6 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
             }
             else if (player == 2)
             {
-                player2.seqNum--;
                 printf("The spot picked is not empty\n");
                 printf("Pick a new number\n");
                 continue;
@@ -219,10 +212,9 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
             {
                 printf("Player 1 has signaled that the game has ended...\n");
                 printf("Player 2 responding that it has got GAME_OVER from player 1...\n");
-                player2.seqNum++;
                 player2.command = 2;
 
-                printf("GameOverSend Version: %d , SeqNumber %d , Command %d, Data %c\n", player2.version, player2.seqNum, player2.command, player2.data);
+                printf("GameOverSend Version: %d, Command %d, Data %c\n", player2.version, player2.command, player2.data);
                 rc = send(sd, &player2, sizeof(player2), MSG_NOSIGNAL);
                 if (rc < 0)
                 {
@@ -247,8 +239,8 @@ int tictactoe(char board[ROWS][COLUMNS], int sd, struct sockaddr_in *serverAdd)
                     printf("Closing connection!\n");
                     exit(1);
                 }
-                } while (rc < 5);
-                printf("Player 1 version: %d , SeqNum: %d , Command: %d , Data: %c GameNumber %d \n", p2Player1->version, p2Player1->seqNum, p2Player1->command, p2Player1->data, p2Player1->gameNumber);
+                } while (rc < 4);
+                printf("Player 1 version: %d, Command: %d , Data: %c GameNumber %d \n", p2Player1->version, p2Player1->command, p2Player1->data, p2Player1->gameNumber);
                 printf("Recived GAME_OVER\n");
 
                 if (rc <= 0)
@@ -372,8 +364,7 @@ struct buffer P2choice(struct buffer player2)
         while (getchar() != '\n')
             ;
     }
-    player2.version = 5;
-    player2.seqNum++;
+    player2.version = 6;
     player2.command = 1;
     player2.data = input + '0';
     return player2;

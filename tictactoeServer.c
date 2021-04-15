@@ -5,57 +5,46 @@
 /***********************************************************/
 
 /* #include files go here */
+#include <arpa/inet.h>
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
 #include <strings.h>
-#include <netdb.h>
-#include <sys/time.h>
-#include <sys/types.h>
+#include <string.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-
-/*************************/
-/* ENVIRONMENT CONSTANTS */
-/*************************/
-
-/* The protocol version number used. */
-#define VERSION 6
-
-/* The number of command line arguments. */
-#define NUM_ARGS 2
-/* The maximum length to which the queue of pending connections may grow. */
-#define BACKLOG_MAX 5
-/* The maximum size of a buffer for the program. */
-#define BUFFER_SIZE 100
-/* The error code used to signal an invalid move. */
-#define ERROR_CODE -1
-/* The number of seconds spend waiting before a game times out. */
-
-/* The number of rows for the TicIacToe board. */
-#define ROWS 3
-/* The number of columns for the TicIacToe board. */
-#define COLUMNS 3
-/* The size (in bytes) of each game command. */
-#define CMD_SIZE 4
-/* The size (in bytes) of the game state. */
-#define GAME_SIZE (ROWS * COLUMNS)
-/* The maximum number of games the server can play simultaneously. */
-#define MAX_GAMES 10
-/* The baord marker used for Player 1 */
-#define P1_MARK 'X'
-/* The baord marker used for Player 2 */
-#define P2_MARK 'O'
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 /**************************/
 /* ENVIRONMENT STRUCTURES */
 /**************************/
 
-/* Structure to send and recieve player messages. */
-struct Buffer {
+/* The number of rows for the TicIacToe board. */
+#define ROWS 3
+/* The number of columns for the TicIacToe board. */
+#define COLUMNS 3
+/* The size (in bytes) of the game state. */
+#define GAME_SIZE (ROWS * COLUMNS)
+/* The maximum number of games the server can play simultaneously. */
+#define MAX_GAMES 10
+
+/* Structure to send and recieve UDP player messages. */
+struct UDP_Buffer {
+    char version;           // version number
+    char command;           // player command
+    unsigned short port;    // TODO
+};
+
+/* Structure to send and recieve TCP player messages. */
+struct TCP_Buffer {
     char version;   // version number
     char command;   // player command
     char data;      // data for command if applicable
@@ -67,12 +56,30 @@ struct TTT_Game {
     int sd;                         // socket descriptor for connected player
     int gameNum;                    // game number
     int winner;                     // player who won, 0 if draw, -1 if game not over
-    char board[ROWS*COLUMNS];       // TicTacToe game board state
+    char board[GAME_SIZE];          // TicTacToe game board state
+};
+
+/* Structure for TODO . */
+struct Server {
+    int sd;                                 // socket descriptor for the server
+    int mcd;                                // socket descriptor for the multicast group
+    int maxSD;                              // TODO
+    fd_set socketFDS;                       // TODO
+    struct sockaddr_in serverAddr;          // TODO
+    struct sockaddr_in mulicastAddr;        // TODO
+    struct TTT_Game gameRoster[MAX_GAMES];  // TODO
 };
 
 /*****************************/
 /* GENERAL PURPOSE FUNCTIONS */
 /*****************************/
+
+/* The number of command line arguments. */
+#define NUM_ARGS 2
+/* The maximum size of a buffer for the program. */
+#define BUFFER_SIZE 100
+/* The error code used to signal an invalid move. */
+#define ERROR_CODE -1
 
 void print_error(const char *msg, int errnum, int terminate);
 void handle_init_error(const char *msg, int errnum);
@@ -82,45 +89,77 @@ void extract_args(char *argv[], int *port);
 /* SOCKET AND NETWORK FUNCTIONS */
 /********************************/
 
-void print_server_info(struct sockaddr_in serverAddr);
-int create_endpoint(struct sockaddr_in *socketAddr, unsigned long address, int port);
+/* The protocol version number used. */
+#define VERSION 6
+/* The maximum length to which the queue of pending connections may grow. */
+#define BACKLOG_MAX 5
+/* TODO */
+#define MC_PORT 1818
+/* TODO */
+#define MC_GROUP "239.0.0.1"
+
+int create_endpoint(struct sockaddr_in *socketAddr, int type, unsigned long address, int port);
+void add_multicast_group(const struct Server *serv, const char *groupAddr);
+void print_server_info(const struct Server *serv);
 
 /******************************/
 /* TIC-TAC-TOE GAME FUNCTIONS */
 /******************************/
 
+/* The baord marker used for Player 1 */
+#define P1_MARK 'X'
+/* The baord marker used for Player 2 */
+#define P2_MARK 'O'
+
 void init_shared_state(struct TTT_Game *game);
-void reset_game(struct TTT_Game *game);
-void init_game_roster(struct TTT_Game roster[MAX_GAMES]);
-int find_open_game(struct TTT_Game roster[MAX_GAMES]);
-int get_command(int sd, struct Buffer *msg);
-int validate_move(int choice, const struct TTT_Game *game);
+int load_shared_state(struct TTT_Game *game);
+void init_game_roster(struct Server *serv);
+int find_open_game(const struct Server *serv);
+int get_udp_command(int sd, struct sockaddr_in *playerAddr, struct UDP_Buffer *datagram);
+void send_game_available(const struct Server *serv, const struct sockaddr_in *playerAddr);
+int get_tcp_command(int sd, struct TCP_Buffer *msg);
+void send_game_over(struct TTT_Game *game);
 int minimax(struct TTT_Game *game, int depth, int isMax);
 int find_best_move(struct TTT_Game *game);
+int validate_move(int choice, const struct TTT_Game *game);
 int send_p1_move(struct TTT_Game *game);
 int check_win(const struct TTT_Game *game);
 int check_draw(const struct TTT_Game *game);
-void print_board(const struct TTT_Game *game);
 int check_game_over(struct TTT_Game *game);
-void send_game_over(struct TTT_Game *game);
-void tictactoe(int sd);
+void print_board(const struct TTT_Game *game);
+void reset_game(struct TTT_Game *game);
+void tictactoe(struct Server *serv);
 
 /*******************/
 /* PLAYER COMMANDS */
 /*******************/
 
-/* Function pointer type for function to handle player commands. */
-typedef void (*Command_Handler)(const struct Buffer *msg, struct TTT_Game *game);
-/* The command to begin a new game */
-#define NEW_GAME 0x00
-/* The command to issue a move. */
-#define MOVE 0x01
-/* The command to signal that the game has ended. */
-#define GAME_OVER 0x02
+/* The size (in bytes) of each UDP game command. */
+#define UDP_CMD_SIZE (sizeof(struct UDP_Buffer))
+/* The size (in bytes) of each TCP game command. */
+#define TCP_CMD_SIZE (sizeof(struct TCP_Buffer))
 
-void new_game(const struct Buffer *msg, struct TTT_Game *game);
-void move(const struct Buffer *msg, struct TTT_Game *game);
-void game_over(const struct Buffer *msg, struct TTT_Game *game);
+/* Function pointer type for function to handle player commands. */
+typedef void (*Command_Handler)(const struct TCP_Buffer *msg, struct TTT_Game *game);
+/* The TCP command to begin a new game */
+#define NEW_GAME 0x00
+/* The TCP command to issue a move. */
+#define MOVE 0x01
+/* The TCP command to signal that the game has ended. */
+#define GAME_OVER 0x02
+/* The TCP command to resume a previously started game. */
+#define RESUME_GAME 0x03
+
+/* The UDP command for a client to request an open game from the multicast group. */
+#define REQUEST_GAME 0x04
+/* The UDP command from a server in the mulicast group that a game is available. */
+#define GAME_AVAILABLE 0x05
+
+void new_game(const struct TCP_Buffer *msg, struct TTT_Game *game);
+void move(const struct TCP_Buffer *msg, struct TTT_Game *game);
+void game_over(const struct TCP_Buffer *msg, struct TTT_Game *game);
+void resume_game(const struct TCP_Buffer *msg, struct TTT_Game *game);
+void request_game(const struct Server *serv, const struct sockaddr_in *playerAddr);
 
 /**
  * @brief This program creates and sets up a TicTacToe server which acts as Player 1 in a
@@ -143,23 +182,27 @@ void game_over(const struct Buffer *msg, struct TTT_Game *game);
  * the value EXIT_FAILURE indicates unsuccessful termination.
  */
 int main(int argc, char *argv[]) {
-    int sd, portNumber;
-    struct sockaddr_in serverAddress;
+    int portNumber;
+    struct Server serv;
 
     /* If arg count correct, extract arguments to their respective variables */
     if (argc != NUM_ARGS) handle_init_error("argc: Invalid number of command line arguments", 0);
     extract_args(argv, &portNumber);
 
+    /* Create multicast socket and join multicast group */
+    serv.mcd = create_endpoint(&serv.mulicastAddr, SOCK_DGRAM, INADDR_ANY, MC_PORT);
+    add_multicast_group(&serv, MC_GROUP);
     /* Create server socket */
-    sd = create_endpoint(&serverAddress, INADDR_ANY, portNumber);
+    serv.sd = create_endpoint(&serv.serverAddr, SOCK_STREAM, INADDR_ANY, portNumber);
     /* Print server information and listen for waiting clients */
-    if (listen(sd, BACKLOG_MAX) == 0) {
-        print_server_info(serverAddress);
+    if (listen(serv.sd, BACKLOG_MAX) == 0) {
+        print_server_info(&serv);
         /* Start the TicTacToe server */
-        tictactoe(sd);
+        tictactoe(&serv);
     } else {
         print_error("listen", errno, 0);
-        if (close(sd) < 0) print_error("main: close-server", errno, 0);
+        if (close(serv.mcd) < 0) print_error("main: close-multicast", errno, 0);
+        if (close(serv.sd) < 0) print_error("main: close-server", errno, 0);
     }
 
     return 0;
@@ -216,11 +259,67 @@ void extract_args(char *argv[], int *port) {
 }
 
 /**
+ * @brief Creates the comminication endpoint with the provided IP address and port number. If any
+ * errors are found, the function terminates the process.
+ * 
+ * @param socketAddr The socket address structure created for the comminication endpoint.
+ * @param address The IP address for the socket address structure.
+ * @param port The port number for the socket address structure.
+ * @return The socket descriptor of the created comminication endpoint.
+ */
+int create_endpoint(struct sockaddr_in *socketAddr, int type, unsigned long address, int port) {
+    int sd;
+    /* Create socket */
+    if ((sd = socket(AF_INET, type, 0)) >= 0) {
+        /* TODO */
+        bzero((char *)socketAddr, sizeof(struct sockaddr_in *));
+        /* TODO */
+        socketAddr->sin_family = AF_INET;
+        /* Assign IP address to socket */
+        socketAddr->sin_addr.s_addr = htonl(address);
+        /* Assign port number to socket */
+        socketAddr->sin_port = htons(port);
+    } else {
+        print_error("create_endpoint: socket", errno, 1);
+    }
+    /* Bind socket to communication endpoint */
+    if (bind(sd, (struct sockaddr *)socketAddr, sizeof(struct sockaddr_in)) < 0) {
+        print_error("create_endpoint: bind", errno, 1);
+    }
+    if (type == SOCK_DGRAM) {
+        printf("[+]DGRAM socket created successfully.\n");
+    } else if (type == SOCK_STREAM) {
+        printf("[+]STREAM socket created successfully.\n");
+    } else {
+        printf("[+]UNKNOWN socket created successfully.\n");
+    }
+    return sd;
+}
+
+/**
+ * @brief TODO
+ * 
+ * @param serv 
+ * @param groupAddr 
+ */
+void add_multicast_group(const struct Server *serv, const char *groupAddr) {
+    struct ip_mreq mreq;
+    /* TODO */
+    mreq.imr_multiaddr.s_addr = inet_addr(groupAddr);
+    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    /* TODO */
+    if (setsockopt(serv->mcd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(struct ip_mreq)) < 0) {
+        print_error("add_multicast_group: setsockopt", errno, 1);
+    }
+    printf("Server joined multicast group at %s (port %hu)\n", groupAddr, serv->mulicastAddr.sin_port);
+}
+
+/**
  * @brief Prints the server information needed for the client to comminicate with the server.
  * 
- * @param serverAddr The socket address structure for the server comminication endpoint.
+ * @param serv TODO
  */
-void print_server_info(const struct sockaddr_in serverAddr) {
+void print_server_info(const struct Server *serv) {
     int hostname;
     char hostbuffer[BUFFER_SIZE], *IP_addr;
     struct hostent *host_entry;
@@ -236,38 +335,7 @@ void print_server_info(const struct sockaddr_in serverAddr) {
     /* Convert the host internet network address to an ASCII string */
     IP_addr = inet_ntoa(*((struct in_addr *)host_entry->h_addr_list[0]));
     /* Print the IP address and port number for the server */
-    printf("Server listening at %s on port %hu\n", IP_addr, serverAddr.sin_port);
-}
-
-/**
- * @brief Creates the comminication endpoint with the provided IP address and port number. If any
- * errors are found, the function terminates the process.
- * 
- * @param socketAddr The socket address structure created for the comminication endpoint.
- * @param address The IP address for the socket address structure.
- * @param port The port number for the socket address structure.
- * @return The socket descriptor of the created comminication endpoint.
- */
-int create_endpoint(struct sockaddr_in *socketAddr, unsigned long address, int port) {
-    int sd;
-    /* Create socket */
-    if ((sd = socket(AF_INET, SOCK_STREAM, 0)) != -1) {
-        socketAddr->sin_family = AF_INET;
-        /* Assign IP address to socket */
-        socketAddr->sin_addr.s_addr = address;
-        /* Assign port number to socket */
-        socketAddr->sin_port = htons(port);
-    } else {
-        print_error("create_endpoint: socket", errno, 1);
-    }
-    /* Bind socket to communication endpoint */
-    if (bind(sd, (struct sockaddr *)socketAddr, sizeof(struct sockaddr_in)) == 0) {
-        printf("[+]Server socket created successfully.\n");
-    } else {
-        print_error("create_endpoint: bind", errno, 1);
-    }
-
-    return sd;
+    printf("Server listening at %s on port %hu\n", IP_addr, serv->serverAddr.sin_port);
 }
 
 /**
@@ -284,6 +352,53 @@ void init_shared_state(struct TTT_Game *game) {
 }
 
 /**
+ * @brief TODO
+ * 
+ * @param game The current game of TicTacToe being played.
+ * @return 
+ */
+int load_shared_state(struct TTT_Game *game) {    
+    int i, bytes = 0, moveCountP1 = 0, moveCountP2 = 0;
+    char boardState[GAME_SIZE];
+    /* Receive shared state (aka the board) from remote player */
+    while (bytes < GAME_SIZE) {
+        int rv;
+        /* Receive partial board state */
+        if ((rv = recv(game->sd, boardState+bytes, GAME_SIZE, 0)) <= 0) {
+            if (rv == 0) {
+                print_error("load_shared_state: Player 2 has disconnected", 0, 0);
+            } else {
+                print_error("load_shared_state", errno, 0);
+            }
+            return 0;
+        }
+        /* Update total bytes received for shared state */
+        bytes += rv;
+    }
+
+    /* TODO */
+    for (i = 0; i < GAME_SIZE; i++) {
+        char mark = boardState[i];
+        if (mark == 0 || mark == P1_MARK || mark == P2_MARK) {
+            if (mark != 0) {
+                game->board[i] = mark;
+                (mark == P1_MARK) ? moveCountP1++ : moveCountP2++;
+            }
+        } else {
+            print_error("load_shared_state: The received board contains invalid marks", 0, 0);
+            return 0;
+        }
+    }
+    /* Validate board TODO */
+    if (moveCountP1 != moveCountP2) {
+        print_error("load_shared_state: Board state contains an invalid number of moves", 0, 0);
+        return 0;
+    }
+
+    return 1;
+}
+
+/**
  * @brief Resets the current game for a new player.
  * 
  * @param game The current game of TicTacToe being played.
@@ -296,7 +411,7 @@ void reset_game(struct TTT_Game *game) {
         if (close(game->sd) < 0) print_error("reset_game: close-connection", errno, 0);
     }
     /* Reset game attributes */
-    game->sd = 0;
+    game->sd = -1;
     game->winner = -1;
     /* Reset game board */
     init_shared_state(game);
@@ -305,14 +420,15 @@ void reset_game(struct TTT_Game *game) {
 /**
  * @brief Initializes the starting state of each game of TicTacToe in the current game roster.
  * 
- * @param roster The array of playable TicTacToe games.
+ * @param serv TODO
  */
-void init_game_roster(struct TTT_Game roster[MAX_GAMES]) {
+void init_game_roster(struct Server *serv) {
     int i;
     printf("[+]Initializing shared game states.\n");
+    memset(serv->gameRoster, 0, sizeof(serv->gameRoster));
     /* Iterates over all games */
     for (i = 0;  i < MAX_GAMES; i++) {
-        struct TTT_Game *game = &roster[i];
+        struct TTT_Game *game = &serv->gameRoster[i];
         /* Initialize current game attributes to default values */
         reset_game(game);
         /* Set current game number */
@@ -323,16 +439,16 @@ void init_game_roster(struct TTT_Game roster[MAX_GAMES]) {
 /**
  * @brief Finds an open game of TicTacToe to play if one is available.
  * 
- * @param roster The array of playable TicTacToe games.
+ * @param serv TODO
  * @return The index of an open game if one is available, otherwise an error code is returned.
  */
-int find_open_game(struct TTT_Game roster[MAX_GAMES]) {
+int find_open_game(const struct Server *serv) {
     int i, gameIndex = ERROR_CODE;
     /* Searches over all games */
     for (i = 0; i < MAX_GAMES; i++) {
-        struct TTT_Game *game = &roster[i];
+        const struct TTT_Game *game = &serv->gameRoster[i];
         /* Check that a client is not connected to the game */
-        if (game->sd <= 0) {
+        if (game->sd < 0) {
             gameIndex = i;
             break;
         }
@@ -341,24 +457,92 @@ int find_open_game(struct TTT_Game roster[MAX_GAMES]) {
 }
 
 /**
- * @brief Gets a command from the remote player and attempts to validate the data and syntax
- * based on the current protocol.
+ * @brief Gets a UDP command from the remote player and attempts to validate the data and
+ * syntax based on the current protocol.
  * 
- * @param sd The socket descriptor of the connected player's comminication endpoint.
- * @param msg The buffer to store the command that the remote player sends.
+ * @param sd The socket descriptor of the multicast group.
+ * @param playerAddr The address of the remote player.
+ * @param datagram The datagram to store the command that the remote player sent.
  * @return The number of bytes received for the command, or an error code if an error occured. 
  */
-int get_command(int sd, struct Buffer *msg) {
+int get_udp_command(int sd, struct sockaddr_in *playerAddr, struct UDP_Buffer *datagram) {
+    int bytes = 0;
+    socklen_t fromLength = sizeof(struct sockaddr_in);
+    /* Receive and validate command from remote player */
+    if ((bytes = recvfrom(sd, datagram, UDP_CMD_SIZE, 0, (struct sockaddr *)playerAddr, &fromLength)) <= 0) {
+        /* Check for error receiving command */
+        if (bytes == 0) {
+            print_error("get_udp_command: Received empty datagram. Datagram discarded", 0, 0);
+        } else {
+            print_error("get_udp_command", errno, 0);
+        }
+        return ERROR_CODE;
+    }
+    /* Validate the received message */
+    if (datagram->version != VERSION) {  // check for correct version
+        print_error("get_udp_command: Protocol version not supported", 0, 0);
+        return ERROR_CODE;
+    } else if (datagram->command < REQUEST_GAME || datagram->command > GAME_AVAILABLE) {  // check for valid command
+        print_error("get_udp_command: Invalid UDP command", 0, 0);
+        return ERROR_CODE;
+    }
+    return bytes;
+}
+
+/**
+ * @brief TODO
+ * 
+ * @param serv TODO
+ * @param playerAddr The address of the remote player.
+ */
+void request_game(const struct Server *serv, const struct sockaddr_in *playerAddr) {
+    printf("A remote player issued a REQUEST_GAME command\n");
+    /* TODO */
+    if (find_open_game(serv) >= 0) {
+        send_game_available(serv, playerAddr);
+    } else {
+        print_error("request_game: Unable to find an open game", 0, 0);
+    }
+}
+
+/**
+ * @brief TODO
+ * 
+ * @param serv TODO
+ * @param playerAddr The address of the remote player.
+ */
+void send_game_available(const struct Server *serv, const struct sockaddr_in *playerAddr) {
+    struct UDP_Buffer datagram = {0};
+    /* Pack command information into datagram */
+    datagram.version = VERSION;
+    datagram.command = GAME_AVAILABLE;
+    datagram.port = serv->serverAddr.sin_port;
+    /* Send the command to the remote player */
+    printf("Server sent the GAME_AVAILABLE command to the remote player\n");
+    if (sendto(serv->mcd, &datagram, UDP_CMD_SIZE, 0, (struct sockaddr *)playerAddr, sizeof(struct sockaddr_in)) < 0) {
+        print_error("send_game_available", errno, 0);
+    }
+}
+
+/**
+ * @brief Gets a TCP command from the remote player and attempts to validate the data and
+ * syntax based on the current protocol.
+ * 
+ * @param sd The socket descriptor of the connected player's comminication endpoint.
+ * @param msg The buffer to store the command that the remote player sent.
+ * @return The number of bytes received for the command, or an error code if an error occured. 
+ */
+int get_tcp_command(int sd, struct TCP_Buffer *msg) {
     int bytes = 0;
     /* Receive message from remote player */
-    while (bytes < CMD_SIZE) {
+    while (bytes < TCP_CMD_SIZE) {
         int rv;
         /* Receive partial message */
-        if ((rv = recv(sd, msg+bytes, sizeof(struct Buffer), 0)) <= 0) {
+        if ((rv = recv(sd, msg+bytes, TCP_CMD_SIZE, 0)) <= 0) {
             if (rv == 0) {
-                print_error("get_command: Player 2 has disconnected", 0, 0);
+                print_error("get_tcp_command: Player 2 has disconnected", 0, 0);
             } else {
-                print_error("get_command", errno, 0);
+                print_error("get_tcp_command", errno, 0);
             }
             return ERROR_CODE;
         }
@@ -367,13 +551,13 @@ int get_command(int sd, struct Buffer *msg) {
     }
     /* Validate the received message */
     if (msg->version != VERSION) {  // check for correct version
-        print_error("get_command: Protocol version not supported", 0, 0);
+        print_error("get_tcp_command: Protocol version not supported", 0, 0);
         return ERROR_CODE;
-    } else if (msg->command < NEW_GAME || msg->command > GAME_OVER) {  // check for valid command
-        print_error("get_command: Invalid command", 0, 0);
+    } else if (msg->command < NEW_GAME || msg->command > RESUME_GAME) {  // check for valid command
+        print_error("get_tcp_command: Invalid TCP command", 0, 0);
         return ERROR_CODE;
     } else if (msg->command != NEW_GAME && (msg->gameNum < 1 || msg->gameNum > MAX_GAMES)) { // check for valid game number
-        print_error("get_command: Invalid game number", 0, 0);
+        print_error("get_tcp_command: Invalid game number", 0, 0);
         return ERROR_CODE;
     }
     return bytes;
@@ -383,10 +567,10 @@ int get_command(int sd, struct Buffer *msg) {
  * @brief Handles the NEW_GAME command from the remote player. Initializes a new game, if
  * available, and sends the first move to the remote player.
  * 
- * @param msg The message containing the command that the remote player sends.
+ * @param msg The message containing the command that the remote player sent.
  * @param game The current game of TicTacToe being played.
  */
-void new_game(const struct Buffer *msg, struct TTT_Game *game) {
+void new_game(const struct TCP_Buffer *msg, struct TTT_Game *game) {
     int move;
     printf("The remote player issued a NEW_GAME command\n");
     /* Initialize the board */
@@ -408,10 +592,10 @@ void new_game(const struct Buffer *msg, struct TTT_Game *game) {
  * appropriate message is printed. If the game ends from a move from the remote player,
  * a GAME_OVER command is rent back in response.
  * 
- * @param msg The message containing the command that the remote player sends.
+ * @param msg The message containing the command that the remote player sent.
  * @param game The current game of TicTacToe being played.
  */
-void move(const struct Buffer *msg, struct TTT_Game *game) {
+void move(const struct TCP_Buffer *msg, struct TTT_Game *game) {
     /* Get move from remote player */
     int move = msg->data - '0';
     printf("The remote player issued a MOVE command\n");
@@ -443,10 +627,10 @@ void move(const struct Buffer *msg, struct TTT_Game *game) {
  * @brief Handles the GAME_OVER command from the remote player. Determines the reason for
  * ending the game, prints the appropriate message, and resets the game.
  * 
- * @param msg The message containing the command that the remote player sends.
+ * @param msg The message containing the command that the remote player sent.
  * @param game The current game of TicTacToe being played.
  */
-void game_over(const struct Buffer *msg, struct TTT_Game *game) {
+void game_over(const struct TCP_Buffer *msg, struct TTT_Game *game) {
     printf("The remote player issued a GAME_OVER command\n");
     printf("Player 2 has signaled that the game is over\n");
     /* Check if the game is actually over */
@@ -460,6 +644,39 @@ void game_over(const struct Buffer *msg, struct TTT_Game *game) {
     }
     /* Reset the game */
     reset_game(game);
+}
+
+/**
+ * @brief TODO
+ * 
+ * @param msg The message containing the command that the remote player sent.
+ * @param game The current game of TicTacToe being played.
+ */
+void resume_game(const struct TCP_Buffer *msg, struct TTT_Game *game) {
+    int move;
+    printf("The remote player issued a RESUME_GAME command\n");
+    /* TODO */
+    if (load_shared_state(game)) {
+        print_board(game);
+    } else {
+        reset_game(game);
+        return;
+    }
+    /* TODO */
+    if (check_game_over(game)) {
+        /* If Player 2 won, send GAME_OVER command and reset game */
+        send_game_over(game);
+        return;
+    }
+    /* If nobody won, make a move to send to the remote player */
+    if ((move = send_p1_move(game)) == ERROR_CODE) {
+        /* Reset game if there was an error sending the move */
+        reset_game(game);
+        return;
+    }
+    /* Update and print game board */
+    game->board[move-1] = P1_MARK;
+    if (!check_game_over(game)) print_board(game);
 }
 
 /**
@@ -583,7 +800,7 @@ int find_best_move(struct TTT_Game *game) {
  * @return The move that was sent, or an error code if there was an issue. 
  */
 int send_p1_move(struct TTT_Game *game) {
-    struct Buffer msg = {0};
+    struct TCP_Buffer msg = {0};
     /* Get move to send to remote player */
     int move = find_best_move(game);
     while (!validate_move(move, game)) move = find_best_move(game);
@@ -594,7 +811,7 @@ int send_p1_move(struct TTT_Game *game) {
     msg.gameNum = game->gameNum;
     /* Send the move to the remote player */
     printf("Server sent the move:  %c\n", msg.data);
-    if (send(game->sd, &msg, sizeof(struct Buffer), MSG_NOSIGNAL) < 0) {
+    if (send(game->sd, &msg, TCP_CMD_SIZE, MSG_NOSIGNAL) < 0) {
         print_error("send_p1_move", errno, 0);
         return ERROR_CODE;
     }
@@ -697,21 +914,20 @@ int check_game_over(struct TTT_Game *game) {
 }
 
 /**
- * @brief Sends GAME_OVER command to the remote player and puts the current game into a
- * waiting state to listen for any commands from the remote player that may need to be
- * processed to end the game.
+ * @brief Sends GAME_OVER command to the remote player and resets the current game for
+ * a new player.
  * 
  * @param game The current game of TicTacToe being played.
  */
 void send_game_over(struct TTT_Game *game) {
-    struct Buffer msg = {0};
+    struct TCP_Buffer msg = {0};
     /* Pack command information into message */
     msg.version = VERSION;
     msg.command = GAME_OVER;
     msg.gameNum = game->gameNum;
     /* Send the command to the remote player */
     printf("Server sent the GAME_OVER command to Player 2\n");
-    if (send(game->sd, &msg, sizeof(struct Buffer), MSG_NOSIGNAL) < 0) {
+    if (send(game->sd, &msg, TCP_CMD_SIZE, MSG_NOSIGNAL) < 0) {
         print_error("send_game_over", errno, 0);
     }
     /* Reset the game */
@@ -722,54 +938,71 @@ void send_game_over(struct TTT_Game *game) {
  * @brief Plays multiple games of TicTacToe with remoye players that end when either
  * someone wins, there is a draw, or the remote player leaves the game.
  * 
- * @param sd The socket descriptor of the server comminication endpoint.
+ * @param serv TODO
  */
-void tictactoe(int sd) {
-    int maxSD = sd;
-    fd_set socketFDS;
-    struct TTT_Game gameRoster[MAX_GAMES] = {{0}};
-    Command_Handler commands[] = {new_game, move, game_over};
+void tictactoe(struct Server *serv) {
+    serv->maxSD = (serv->mcd > serv->sd) ? serv->mcd : serv->sd;
+    Command_Handler commands[] = {new_game, move, game_over, resume_game};
 
     /* Initialize all games */
-    init_game_roster(gameRoster);
+    init_game_roster(serv);
     /* Play all the games */
     while (1) {
         int i;
-        struct Buffer msg = {0};
-
         /* Clear previously processed games */
-        FD_ZERO(&socketFDS);
-        /* Set the server to be active */
-        FD_SET(sd, &socketFDS);
+        FD_ZERO(&serv->socketFDS);
+        /* Set the mulicast group and the server to be active */
+        FD_SET(serv->mcd, &serv->socketFDS);
+        FD_SET(serv->sd, &serv->socketFDS);
         /* Set games that have a client connection to be active */
         for (i = 0; i < MAX_GAMES; i++) {
-            int gameSD = gameRoster[i].sd;
+            int gameSD = serv->gameRoster[i].sd;
             if (gameSD > 0) {
-                FD_SET(gameSD, &socketFDS);
-                if (gameSD > maxSD) maxSD = gameSD;
+                FD_SET(gameSD, &serv->socketFDS);
+                if (gameSD > serv->maxSD) serv->maxSD = gameSD;
             }
         }
 
-        /* Block until something arrives for an active game or new connection */
+        /* Block until there is a new connection or a command is received */
         printf("[+]Waiting for other players to issue commands...\n");
-        if (select(maxSD+1, &socketFDS, NULL, NULL, NULL) == -1) {
+        if (select(serv->maxSD+1, &serv->socketFDS, NULL, NULL, NULL) == -1) {
             print_error("select", errno, 0);
             continue;
         }
 
+        /* Check if a command was received from the multicast group */
+        if (FD_ISSET(serv->mcd, &serv->socketFDS)) {
+            struct sockaddr_in clientAddress;
+            struct UDP_Buffer datagram = {0};
+            if (get_udp_command(serv->mcd, &clientAddress, &datagram) > 0) {
+                printf("********  Multicast Group  ********\n");
+                /* Process received command */
+                switch (datagram.command) {
+                    case REQUEST_GAME:
+                        request_game(serv, &clientAddress);
+                        break;
+                    case GAME_AVAILABLE:
+                        print_error("tictactoe: handling of UDP command GAME_AVAILABLE unsupporded by server", 0, 0);
+                        break;
+                }
+            }
+        }
+
         /* Check if a remote player is asking for a new connection */
-        if (FD_ISSET(sd, &socketFDS)) {
+        if (FD_ISSET(serv->sd, &serv->socketFDS)) {
             int connected_sd;
             struct sockaddr_in clientAddress;
-            socklen_t fromLength;
+            socklen_t fromLength = sizeof(struct sockaddr_in);
             /* Accept player connection if able to */
-            if ((connected_sd = accept(sd, (struct sockaddr *)&clientAddress, &fromLength))) {
+            bzero(&clientAddress, sizeof(struct sockaddr_in));
+            if ((connected_sd = accept(serv->sd, (struct sockaddr *)&clientAddress, &fromLength))) {
+                printf("********  TCP Connection  ********\n");
                 printf("Connection request from player at %s (port %d)\n", inet_ntoa(clientAddress.sin_addr), clientAddress.sin_port);
                 /* Find an open game to assign the connection */
-                int gameIndx = find_open_game(gameRoster);
+                int gameIndx = find_open_game(serv);
                 if (gameIndx >= 0) {
                     /* If an open game was found, assign the connection to the game */
-                    struct TTT_Game *currentGame = &gameRoster[gameIndx];
+                    struct TTT_Game *currentGame = &serv->gameRoster[gameIndx];
                     printf("Player assigned to Game #%d\n", currentGame->gameNum);
                     currentGame->sd = connected_sd;
                 } else {
@@ -784,13 +1017,14 @@ void tictactoe(int sd) {
 
         /* Process received commands from active games */
         for (i = 0; i < MAX_GAMES; i++) {
-            struct TTT_Game *currentGame = &gameRoster[i];
+            struct TTT_Game *currentGame = &serv->gameRoster[i];
             /* Check if game is currently active */
-            if (FD_ISSET(currentGame->sd, &socketFDS)) {
+            if (FD_ISSET(currentGame->sd, &serv->socketFDS)) {
                 int rv;
+                struct TCP_Buffer msg = {0};
                 printf("********  Game #%d  ********\n", currentGame->gameNum);
                 /* Get the command for the current game */
-                if ((rv = get_command(currentGame->sd, &msg)) > 0) {
+                if ((rv = get_tcp_command(currentGame->sd, &msg)) > 0) {
                     /* Process received command for current game */
                     commands[(int)msg.command](&msg, currentGame);
                 } else {

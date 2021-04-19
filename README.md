@@ -1,7 +1,7 @@
 # TicTacToe Program – MultiPlayer - STREAM with Multicast and Failover
 > This is the README file for [Final_Project](https://osu.instructure.com/courses/97443/files/27903202/download?download_frd=1)
 
-**NAME:** Conner Graham
+**NAME:** Conner Graham  
 **DATE:** 04/29/2021
 
 ## Table of Contents:

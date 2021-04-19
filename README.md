@@ -36,7 +36,7 @@ until a winner is found or the game is a draw, or ending a game of TicTacToe
 when a player requests to. If a player leaves the game (i.e. closes the
 connection) the game is reset for another player to play.
 The specific tasks the server performs are as follows:
-- Create and bind sockets to send/receive messages for the serevr multicast group
+- Create and bind sockets to send/receive messages for the server multicast group
 - Create and bind server socket from user provided port
 - Print server info and listen for client connections
 - Initialize all game boards

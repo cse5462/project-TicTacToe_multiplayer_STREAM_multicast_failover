@@ -1,6 +1,6 @@
 # TicTacToe Client (Player 2) Design
 > This is the design document for the TicTacToe Client ([tictactoeClient.c](https://github.com/CSE-5462-Spring-2021/project-1-conner-ben/blob/main/tictactoeClient.c)).  
-> By: Ben Nagel
+> By: Conner Graham
 
 ## Table of Contents
 - TicTacToe Class Protocol - [Protocol Document](https://docs.google.com/document/d/1sAJ5aCkF4F-3unADvujkyA34YAVS8z_h0VBOXrvOQ34/edit?usp=sharing)

@@ -65,7 +65,7 @@ struct TTT_Game {
 /* The maximum size of a buffer for the program. */
 #define BUFFER_SIZE 100
 /* The number of seconds spend waiting before multicast group times out. */
-#define MC_TIMEOUT 5
+#define MC_TIMEOUT 30
 /* The number of attempts before giving up on multicast group. */
 #define MC_ATTEMPTS 5
 /* The error code used to signal an invalid move. */
